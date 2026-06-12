@@ -1,0 +1,15 @@
+[Unit]
+Description=iTTSd local queued streaming TTS daemon
+After=default.target sound.target pipewire.service qwen3-fast-tts.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/ittsd
+ExecStart=%h/dev/ittsd/bin/ittsd --addr 127.0.0.1:8765 --python %h/qwen3-tts-test/.venv/bin/python --worker %h/dev/ittsd/worker.py --runtime-dir %h/.cache/ittsd --model custom-0.6b --voice Vivian --lang auto --tempo 1.15 --fast-url http://127.0.0.1:8001
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=HF_HUB_ENABLE_HF_TRANSFER=0
+
+[Install]
+WantedBy=default.target

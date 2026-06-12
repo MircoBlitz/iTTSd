@@ -1,0 +1,16 @@
+[Unit]
+Description=Faster Qwen3 TTS streaming backend
+After=default.target network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/qwen3-tts-server-fast
+ExecStart=%h/dev/qwen3-tts-server-fast/.venv/bin/python server.py --host 127.0.0.1 --port 8001
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=HF_HUB_ENABLE_HF_TRANSFER=0
+Environment=QWEN3_TTS_DEFAULT_VOICE=vivian
+
+[Install]
+WantedBy=default.target

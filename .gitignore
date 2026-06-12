@@ -1,0 +1,8 @@
+bin/
+*.log
+.speedtest-start
+.DS_Store
+.cache/
+.env
+.env.*
+!.env.example
