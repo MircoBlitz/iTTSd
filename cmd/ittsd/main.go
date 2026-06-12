@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -176,35 +177,42 @@ func (d *Daemon) playFastStream(j *Job, text string, last bool) error {
 	d.playing = "fast-pcm-stream"
 	d.mu.Unlock()
 	defer func() { d.mu.Lock(); d.playing = ""; d.mu.Unlock() }()
-	buf := make([]byte, 32*1024)
 	first := true
 	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if first {
-				first = false
-				now := time.Now()
-				d.mark(j.ID, func(j *Job) {
-					if j.Timings.FirstChunkReadyAt.IsZero() {
-						j.Timings.FirstChunkReadyAt = now
-					}
-					if j.Timings.FirstPlaybackAt.IsZero() {
-						j.Timings.FirstPlaybackAt = now
-						j.Status = "playing"
-					}
-				})
+		var hdr [4]byte
+		if _, err := io.ReadFull(resp.Body, hdr[:]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
 			}
-			if _, err := stdin.Write(buf[:n]); err != nil {
-				_ = cmd.Process.Kill()
-				return err
-			}
+			_ = cmd.Process.Kill()
+			return err
 		}
-		if readErr == io.EOF {
+		n := binary.BigEndian.Uint32(hdr[:])
+		if n == 0 {
 			break
 		}
-		if readErr != nil {
+		pcm := make([]byte, n)
+		if _, err := io.ReadFull(resp.Body, pcm); err != nil {
 			_ = cmd.Process.Kill()
-			return readErr
+			return err
+		}
+		applyS16Gain(pcm, 0.85)
+		if first {
+			first = false
+			now := time.Now()
+			d.mark(j.ID, func(j *Job) {
+				if j.Timings.FirstChunkReadyAt.IsZero() {
+					j.Timings.FirstChunkReadyAt = now
+				}
+				if j.Timings.FirstPlaybackAt.IsZero() {
+					j.Timings.FirstPlaybackAt = now
+					j.Status = "playing"
+				}
+			})
+		}
+		if _, err := stdin.Write(pcm); err != nil {
+			_ = cmd.Process.Kill()
+			return err
 		}
 	}
 	_ = stdin.Close()
@@ -213,6 +221,22 @@ func (d *Daemon) playFastStream(j *Job, text string, last bool) error {
 		d.mark(j.ID, func(j *Job) { j.Timings.PlaybackEndedAt = time.Now() })
 	}
 	return err
+}
+
+func applyS16Gain(pcm []byte, gain float64) {
+	if gain == 1 || len(pcm) < 2 {
+		return
+	}
+	for i := 0; i+1 < len(pcm); i += 2 {
+		v := int16(binary.LittleEndian.Uint16(pcm[i:]))
+		scaled := int(float64(v) * gain)
+		if scaled > 32767 {
+			scaled = 32767
+		} else if scaled < -32768 {
+			scaled = -32768
+		}
+		binary.LittleEndian.PutUint16(pcm[i:], uint16(int16(scaled)))
+	}
 }
 
 func (d *Daemon) getJobStatus(id string) string {
