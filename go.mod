@@ -1,3 +1,3 @@
-module github.com/yourusername/ittsd
+module github.com/MircoBlitz/iTTSd
 
 go 1.25

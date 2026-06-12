@@ -21,7 +21,7 @@ command -v sox
 ## Build and install iTTSd
 
 ```bash
-git clone https://github.com/YOURNAME/ittsd.git ~/dev/ittsd
+git clone https://github.com/MircoBlitz/iTTSd.git ~/dev/ittsd
 cd ~/dev/ittsd
 ./scripts/install-user-service.sh
 ```

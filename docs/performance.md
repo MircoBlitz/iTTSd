@@ -9,16 +9,6 @@ Initial development machine:
 - OS: Fedora/Nobara Linux
 - Audio: PipeWire
 
-## Fallback Python worker
-
-Baseline with persistent Python worker but full WAV chunks:
-
-```text
-accepted_to_first_playback_ms: ~2730 ms
-```
-
-Short single-word chunks can be around 1 second, but normal first sentences are slower.
-
 ## Fast streaming backend
 
 With `faster-qwen3-tts` token-level PCM streaming:

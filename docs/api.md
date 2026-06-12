@@ -23,9 +23,9 @@ Request fields:
 | `text` | string | required | Text to speak |
 | `lang` | string | `auto` | `en`, `de`, `auto`, etc. |
 | `voice` | string | `Vivian` | Qwen preset voice |
-| `speaker` | string | same as `voice` | Alias for fallback/backend use |
+| `speaker` | string | same as `voice` | Alias for backend use |
 | `model` | string | `custom-0.6b` | Fallback model alias |
-| `tempo` | number | `1.15` | Used by fallback WAV path; fast PCM path ignores tempo currently |
+| `tempo` | number | ignored | Reserved for future speed control; current fast PCM path ignores it |
 | `instruct` | string | empty | Optional style instruction |
 
 Response:

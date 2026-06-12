@@ -70,16 +70,6 @@ iTTSd → /v1/audio/speech/pcm-stream → raw PCM → pw-play --raw
 
 This is the recommended path and can produce sub-200ms daemon-side first playback on suitable NVIDIA GPUs.
 
-### Fallback backend
-
-When `--fast-url` is empty, iTTSd starts `worker.py` and uses a JSONL protocol over stdin/stdout:
-
-```text
-iTTSd → worker.py → WAV → optional sox tempo → pw-play
-```
-
-This is slower but useful for debugging and portability.
-
 ## Future work
 
 - Direct PipeWire output instead of spawning `pw-play`

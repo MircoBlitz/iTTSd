@@ -13,7 +13,6 @@ accepted_to_first_chunk_ms:    ~156 ms
 accepted_to_first_playback_ms: ~156 ms
 ```
 
-The slower built-in Python fallback remains available, but the fast backend is recommended.
 
 ## Features
 
@@ -22,14 +21,13 @@ The slower built-in Python fallback remains available, but the fast backend is r
 - Fire-and-forget `/speak` endpoint
 - FIFO queue: multiple LLM messages do **not** speak over each other
 - Token-level PCM streaming via `faster-qwen3-tts`
-- Fallback persistent Python/Qwen worker
+- Fallback external streaming Qwen backend
 - PipeWire playback via `pw-play`
 - Systemd user services
 - Latency test script
 - Tested defaults for Qwen3-TTS CustomVoice:
   - model: `custom-0.6b` / fast backend `Qwen3-TTS-12Hz-1.7B-Base`
   - voice: `Vivian`
-  - tempo: `1.15` for fallback mode
 
 ## Architecture
 
@@ -44,18 +42,6 @@ LLM / curl
   → pw-play --raw
 ```
 
-Fallback path:
-
-```text
-LLM / curl
-  → ittsd :8765
-  → queued job
-  → persistent Python qwen-tts worker
-  → WAV chunks
-  → optional sox tempo
-  → pw-play
-```
-
 ## Requirements
 
 Base daemon:
@@ -63,9 +49,8 @@ Base daemon:
 - Linux
 - Go 1.25+
 - PipeWire tools: `pw-play`
-- `sox` for fallback tempo processing
 
-Fast Qwen backend:
+Qwen backend:
 
 - NVIDIA GPU with CUDA support
 - Python 3.12 environment
@@ -73,14 +58,14 @@ Fast Qwen backend:
 - `faster-qwen3-tts`
 - `qwen3-tts-server` cloned separately
 
-This project intentionally does **not** vendor the external Qwen backend.
+This project is Go-only. It intentionally does **not** vendor or embed the external Python Qwen backend; iTTSd talks to it over HTTP.
 
 ## Install quickstart
 
 ### 1. Clone this repo
 
 ```bash
-git clone https://github.com/YOURNAME/ittsd.git ~/dev/ittsd
+git clone https://github.com/MircoBlitz/iTTSd.git ~/dev/ittsd
 cd ~/dev/ittsd
 ```
 
@@ -165,6 +150,14 @@ Run this in a real terminal:
 ```
 
 Press a key when you hear the first audio. The script prints perceived latency and daemon-side latency metrics.
+
+## LLM prompt
+
+A ready-to-paste prompt for teaching LLM agents how to use iTTSd is available at:
+
+```text
+docs/llm-prompt.md
+```
 
 ## HTTP API
 

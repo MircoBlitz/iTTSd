@@ -1,12 +1,8 @@
 # Backends
 
-iTTSd supports two backend modes.
+iTTSd is Go-only. It does not embed Python code or model inference code.
 
-## Fast streaming backend
-
-Recommended.
-
-Uses an external `qwen3-tts-server` process with `faster-qwen3-tts` and token-level PCM streaming.
+The recommended backend is an external `qwen3-tts-server` process with `faster-qwen3-tts` and token-level PCM streaming.
 
 iTTSd flag:
 
@@ -24,45 +20,25 @@ Pros:
 
 - Very low first-audio latency
 - No full WAV generation before playback
-- Uses CUDA graphs
+- Uses CUDA graphs in the backend
 - Keeps Qwen backend warm
+- Keeps iTTSd as a small Go daemon
 
-Cons:
-
-- Requires separate Python service
-- Tempo control is currently not applied to the raw PCM stream
-
-## Fallback Python worker
-
-If `--fast-url` is empty, iTTSd starts `worker.py` directly and communicates over JSONL stdin/stdout.
-
-Flags:
-
-```bash
---python ~/qwen3-tts-test/.venv/bin/python
---worker ~/dev/ittsd/worker.py
-```
-
-Flow:
+External backend project used in the reference setup:
 
 ```text
-ittsd → persistent worker.py → WAV chunk → sox tempo → pw-play
+https://github.com/malaiwah/qwen3-tts-server
 ```
 
-Pros:
+Install helper:
 
-- Simple
-- No external HTTP backend required
-- Tempo works via `sox`
-
-Cons:
-
-- Much higher first-audio latency
-- Generates WAV before playback
+```bash
+./scripts/setup-qwen3-fast-backend.sh
+```
 
 ## Future backend ideas
 
-- Native Rust `faster-qwen3` backend
-- Direct PipeWire playback instead of spawning `pw-play`
-- Kokoro/Piper fallback backends
+- Native Rust or Go model backend adapter
+- Direct PipeWire output instead of spawning `pw-play`
+- Kokoro/Piper HTTP backend adapters
 - OpenAI-compatible remote backend adapter

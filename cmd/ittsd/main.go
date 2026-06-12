@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,18 +20,11 @@ import (
 )
 
 type Config struct {
-	Addr          string
-	Python        string
-	Worker        string
-	RuntimeDir    string
-	DefaultModel  string
-	DefaultVoice  string
-	DefaultLang   string
-	DefaultTempo  float64
-	DefaultDevice string
-	DefaultDType  string
-	Prewarm       bool
-	FastURL       string
+	Addr         string
+	RuntimeDir   string
+	DefaultVoice string
+	DefaultLang  string
+	FastURL      string
 }
 
 type SpeakRequest struct {
@@ -77,124 +67,21 @@ type Job struct {
 	Latencies Latencies    `json:"latencies"`
 }
 
-type WorkerRequest struct {
-	ID       string `json:"id"`
-	Text     string `json:"text"`
-	Model    string `json:"model"`
-	Lang     string `json:"lang"`
-	Speaker  string `json:"speaker"`
-	Instruct string `json:"instruct,omitempty"`
-	Out      string `json:"out"`
-	Device   string `json:"device"`
-	DType    string `json:"dtype"`
-}
-
-type WorkerResponse struct {
-	ID    string `json:"id"`
-	OK    bool   `json:"ok"`
-	Out   string `json:"out"`
-	SR    int    `json:"sr"`
-	Error string `json:"error"`
-}
-
-type AudioPart struct {
-	JobID string
-	Path  string
-	Last  bool
-}
-
-type QwenWorker struct {
-	cfg    Config
-	cmd    *exec.Cmd
-	stdin  *bufio.Writer
-	stdout *bufio.Scanner
-	mu     sync.Mutex
-}
-
-func NewQwenWorker(cfg Config) (*QwenWorker, error) {
-	cmd := exec.Command(cfg.Python, cfg.Worker)
-	cmd.Stderr = os.Stderr
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	scanner := bufio.NewScanner(out)
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
-	return &QwenWorker{cfg: cfg, cmd: cmd, stdin: bufio.NewWriter(in), stdout: scanner}, nil
-}
-
-func (w *QwenWorker) Generate(req WorkerRequest) (WorkerResponse, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	b, _ := json.Marshal(req)
-	if _, err := w.stdin.Write(append(b, '\n')); err != nil {
-		return WorkerResponse{}, err
-	}
-	if err := w.stdin.Flush(); err != nil {
-		return WorkerResponse{}, err
-	}
-	for w.stdout.Scan() {
-		line := bytes.TrimSpace(w.stdout.Bytes())
-		if len(line) == 0 || line[0] != '{' {
-			log.Printf("worker stdout noise: %s", string(line))
-			continue
-		}
-		var resp WorkerResponse
-		if err := json.Unmarshal(line, &resp); err != nil {
-			log.Printf("worker stdout non-json: %s", string(line))
-			continue
-		}
-		if resp.ID != req.ID {
-			log.Printf("worker response id mismatch: got=%s want=%s", resp.ID, req.ID)
-			continue
-		}
-		if !resp.OK {
-			return resp, errors.New(resp.Error)
-		}
-		return resp, nil
-	}
-	if err := w.stdout.Err(); err != nil {
-		return WorkerResponse{}, err
-	}
-	return WorkerResponse{}, errors.New("worker stdout closed")
-}
-
-func (w *QwenWorker) Close() {
-	if w.cmd != nil && w.cmd.Process != nil {
-		_ = w.cmd.Process.Kill()
-	}
-}
-
 type Daemon struct {
-	cfg       Config
-	worker    *QwenWorker
-	jobs      chan *Job
-	playQueue chan AudioPart
-	mu        sync.Mutex
-	all       map[string]*Job
-	current   string
-	playing   string
+	cfg     Config
+	jobs    chan *Job
+	mu      sync.Mutex
+	all     map[string]*Job
+	current string
+	playing string
 }
 
-func NewDaemon(cfg Config, worker *QwenWorker) *Daemon {
-	return &Daemon{cfg: cfg, worker: worker, jobs: make(chan *Job, 256), playQueue: make(chan AudioPart, 256), all: map[string]*Job{}}
+func NewDaemon(cfg Config) *Daemon {
+	return &Daemon{cfg: cfg, jobs: make(chan *Job, 256), all: map[string]*Job{}}
 }
 
 func (d *Daemon) setJob(id, status, errMsg string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if j := d.all[id]; j != nil {
-		j.Status = status
-		j.UpdatedAt = time.Now()
-		j.Error = errMsg
-	}
+	d.mark(id, func(j *Job) { j.Status, j.Error = status, errMsg })
 }
 
 func (d *Daemon) mark(id string, fn func(*Job)) {
@@ -207,25 +94,15 @@ func (d *Daemon) mark(id string, fn func(*Job)) {
 	}
 }
 
-func (d *Daemon) incDone(id string) {
-	d.mark(id, func(j *Job) { j.DoneParts++ })
-}
-
 func (d *Daemon) Enqueue(req SpeakRequest) *Job {
 	if req.Lang == "" {
 		req.Lang = d.cfg.DefaultLang
-	}
-	if req.Model == "" {
-		req.Model = d.cfg.DefaultModel
 	}
 	if req.Voice == "" && req.Speaker == "" {
 		req.Voice = d.cfg.DefaultVoice
 	}
 	if req.Speaker == "" {
 		req.Speaker = req.Voice
-	}
-	if req.Tempo == 0 {
-		req.Tempo = d.cfg.DefaultTempo
 	}
 	now := time.Now()
 	j := &Job{ID: newID(), Req: req, Status: "queued", CreatedAt: now, UpdatedAt: now, Timings: Timings{AcceptedAt: now}}
@@ -249,47 +126,15 @@ func (d *Daemon) generatorLoop() {
 			continue
 		}
 		d.mark(j.ID, func(j *Job) { j.Parts = len(parts) })
-		if d.cfg.FastURL != "" {
-			for i, part := range parts {
-				if err := d.playFastStream(j, part, i == len(parts)-1); err != nil {
-					d.setJob(j.ID, "error", err.Error())
-					break
-				}
-				d.incDone(j.ID)
-			}
-			if d.getJobStatus(j.ID) != "error" {
-				d.setJob(j.ID, "done", "")
-			}
-			d.mu.Lock()
-			d.current = ""
-			d.mu.Unlock()
-			continue
-		}
 		for i, part := range parts {
-			out := filepath.Join(d.cfg.RuntimeDir, fmt.Sprintf("%s-%03d.wav", j.ID, i))
-			wr := WorkerRequest{ID: fmt.Sprintf("%s-%03d", j.ID, i), Text: part, Model: j.Req.Model, Lang: j.Req.Lang, Speaker: j.Req.Speaker, Instruct: j.Req.Instruct, Out: out, Device: d.cfg.DefaultDevice, DType: d.cfg.DefaultDType}
-			resp, err := d.worker.Generate(wr)
-			if err != nil {
+			if err := d.playFastStream(j, part, i == len(parts)-1); err != nil {
 				d.setJob(j.ID, "error", err.Error())
 				break
 			}
-			if i == 0 {
-				d.mark(j.ID, func(j *Job) { j.Timings.FirstChunkReadyAt = time.Now() })
-			}
-			playFile := resp.Out
-			if j.Req.Tempo > 0 && abs(j.Req.Tempo-1.0) > 0.001 {
-				fast := filepath.Join(d.cfg.RuntimeDir, fmt.Sprintf("%s-%03d-tempo.wav", j.ID, i))
-				if err := run("sox", resp.Out, fast, "tempo", fmt.Sprintf("%.3f", j.Req.Tempo)); err == nil {
-					playFile = fast
-				} else {
-					log.Printf("sox tempo failed: %v", err)
-				}
-			}
-			d.playQueue <- AudioPart{JobID: j.ID, Path: playFile, Last: i == len(parts)-1}
-			d.incDone(j.ID)
+			d.mark(j.ID, func(j *Job) { j.DoneParts++ })
 		}
 		if d.getJobStatus(j.ID) != "error" {
-			d.setJob(j.ID, "queued_playback", "")
+			d.setJob(j.ID, "done", "")
 		}
 		d.mu.Lock()
 		d.current = ""
@@ -298,12 +143,7 @@ func (d *Daemon) generatorLoop() {
 }
 
 func (d *Daemon) playFastStream(j *Job, text string, last bool) error {
-	payload := map[string]any{
-		"input":      text,
-		"voice":      strings.ToLower(j.Req.Speaker),
-		"language":   qwenHTTPDirectionLang(j.Req.Lang),
-		"chunk_size": 4,
-	}
+	payload := map[string]any{"input": text, "voice": strings.ToLower(j.Req.Speaker), "language": qwenHTTPDirectionLang(j.Req.Lang), "chunk_size": 4}
 	if j.Req.Instruct != "" {
 		payload["instruct"] = j.Req.Instruct
 	}
@@ -335,6 +175,7 @@ func (d *Daemon) playFastStream(j *Job, text string, last bool) error {
 	d.mu.Lock()
 	d.playing = "fast-pcm-stream"
 	d.mu.Unlock()
+	defer func() { d.mu.Lock(); d.playing = ""; d.mu.Unlock() }()
 	buf := make([]byte, 32*1024)
 	first := true
 	for {
@@ -368,41 +209,10 @@ func (d *Daemon) playFastStream(j *Job, text string, last bool) error {
 	}
 	_ = stdin.Close()
 	err = cmd.Wait()
-	d.mu.Lock()
-	d.playing = ""
-	d.mu.Unlock()
 	if last {
 		d.mark(j.ID, func(j *Job) { j.Timings.PlaybackEndedAt = time.Now() })
 	}
 	return err
-}
-
-func (d *Daemon) playbackLoop() {
-	for part := range d.playQueue {
-		d.mu.Lock()
-		d.playing = part.Path
-		d.mu.Unlock()
-		d.mark(part.JobID, func(j *Job) {
-			if j.Timings.FirstPlaybackAt.IsZero() {
-				j.Timings.FirstPlaybackAt = time.Now()
-				j.Status = "playing"
-			}
-		})
-		if err := run("pw-play", part.Path); err != nil {
-			log.Printf("pw-play failed: %v", err)
-		}
-		if part.Last {
-			d.mark(part.JobID, func(j *Job) {
-				j.Timings.PlaybackEndedAt = time.Now()
-				if j.Status != "error" {
-					j.Status = "done"
-				}
-			})
-		}
-		d.mu.Lock()
-		d.playing = ""
-		d.mu.Unlock()
-	}
 }
 
 func (d *Daemon) getJobStatus(id string) string {
@@ -423,7 +233,7 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		writeJSON(w, map[string]any{"current": d.current, "playing": d.playing, "queued_jobs": len(d.jobs), "queued_audio": len(d.playQueue), "jobs": d.all})
+		writeJSON(w, map[string]any{"current": d.current, "playing": d.playing, "queued_jobs": len(d.jobs), "jobs": d.all})
 	})
 	mux.HandleFunc("POST /speak", func(w http.ResponseWriter, r *http.Request) {
 		var req SpeakRequest
@@ -456,47 +266,20 @@ func main() {
 	home, _ := os.UserHomeDir()
 	cfg := Config{}
 	flag.StringVar(&cfg.Addr, "addr", "127.0.0.1:8765", "listen address")
-	flag.StringVar(&cfg.Python, "python", filepath.Join(home, "qwen3-tts-test/.venv/bin/python"), "python executable")
-	flag.StringVar(&cfg.Worker, "worker", filepath.Join(home, "dev/tts/worker.py"), "python worker path")
-	flag.StringVar(&cfg.RuntimeDir, "runtime-dir", filepath.Join(home, ".cache/ittsd"), "runtime wav dir")
-	flag.StringVar(&cfg.DefaultModel, "model", "custom-0.6b", "default model")
+	flag.StringVar(&cfg.RuntimeDir, "runtime-dir", home+"/.cache/ittsd", "runtime dir")
 	flag.StringVar(&cfg.DefaultVoice, "voice", "Vivian", "default voice")
 	flag.StringVar(&cfg.DefaultLang, "lang", "auto", "default language")
-	flag.Float64Var(&cfg.DefaultTempo, "tempo", 1.15, "default tempo")
-	flag.StringVar(&cfg.DefaultDevice, "device", "cuda:0", "torch device")
-	flag.StringVar(&cfg.DefaultDType, "dtype", "bfloat16", "torch dtype")
-	flag.BoolVar(&cfg.Prewarm, "prewarm", true, "load model with a tiny startup generation")
-	flag.StringVar(&cfg.FastURL, "fast-url", "", "optional faster-qwen3-tts server base URL for PCM streaming backend")
+	flag.StringVar(&cfg.FastURL, "fast-url", "http://127.0.0.1:8001", "faster-qwen3-tts server base URL")
 	flag.Parse()
+	if cfg.FastURL == "" {
+		log.Fatal("--fast-url is required; iTTSd is Go-only and uses an external streaming backend")
+	}
 	if err := os.MkdirAll(cfg.RuntimeDir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	var worker *QwenWorker
-	if cfg.FastURL == "" {
-		var err error
-		worker, err = NewQwenWorker(cfg)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer worker.Close()
-		if cfg.Prewarm {
-			go func() {
-				out := filepath.Join(cfg.RuntimeDir, "prewarm.wav")
-				_, err := worker.Generate(WorkerRequest{ID: "prewarm", Text: "Ready.", Model: cfg.DefaultModel, Lang: "en", Speaker: cfg.DefaultVoice, Out: out, Device: cfg.DefaultDevice, DType: cfg.DefaultDType})
-				if err != nil {
-					log.Printf("prewarm failed: %v", err)
-				} else {
-					log.Printf("prewarm complete")
-				}
-			}()
-		}
-	} else {
-		log.Printf("using fast streaming backend: %s", cfg.FastURL)
-	}
-	d := NewDaemon(cfg, worker)
+	d := NewDaemon(cfg)
 	go d.generatorLoop()
-	go d.playbackLoop()
-	log.Printf("ittsd listening on http://%s default voice=%s tempo=%.2f", cfg.Addr, cfg.DefaultVoice, cfg.DefaultTempo)
+	log.Printf("ittsd listening on http://%s default voice=%s backend=%s", cfg.Addr, cfg.DefaultVoice, cfg.FastURL)
 	server := &http.Server{Addr: cfg.Addr, Handler: d.routes(), ReadHeaderTimeout: 5 * time.Second}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
@@ -527,24 +310,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
 }
-func run(name string, args ...string) error {
-	var stderr bytes.Buffer
-	c := exec.Command(name, args...)
-	c.Stderr = &stderr
-	if err := c.Run(); err != nil {
-		return fmt.Errorf("%s: %w: %s", name, err, stderr.String())
-	}
-	return nil
-}
-func abs(f float64) float64 {
-	if f < 0 {
-		return -f
-	}
-	return f
-}
 func newID() string { b := make([]byte, 8); _, _ = rand.Read(b); return hex.EncodeToString(b) }
-
-var splitRe = regexp.MustCompile(`(?m)([^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$)`)
 
 func qwenHTTPDirectionLang(lang string) string {
 	switch strings.ToLower(lang) {
@@ -558,6 +324,8 @@ func qwenHTTPDirectionLang(lang string) string {
 		return lang
 	}
 }
+
+var splitRe = regexp.MustCompile(`(?m)([^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$)`)
 
 func splitText(s string) []string {
 	s = strings.TrimSpace(s)
