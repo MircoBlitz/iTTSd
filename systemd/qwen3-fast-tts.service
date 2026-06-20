@@ -11,6 +11,9 @@ RestartSec=3
 Environment=PYTHONUNBUFFERED=1
 Environment=HF_HUB_ENABLE_HF_TRANSFER=0
 Environment=QWEN3_TTS_DEFAULT_VOICE=vivian
+Environment=QWEN3_TTS_MODEL_ID=Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+Environment=QWEN3_TTS_PRESET_BUNDLE=%h/dev/ittsd/assets/qwen3-0.6b-preset/bundle.safetensors
+Environment=QWEN3_TTS_PRESET_META=%h/dev/ittsd/assets/qwen3-0.6b-preset/bundle.json
 
 [Install]
 WantedBy=default.target

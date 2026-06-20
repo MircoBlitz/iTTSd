@@ -9,8 +9,8 @@ It accepts non-blocking HTTP speech requests, queues them so voices never overla
 With the optional `qwen3-fast-tts` backend:
 
 ```text
-accepted_to_first_chunk_ms:    ~156 ms
-accepted_to_first_playback_ms: ~156 ms
+accepted_to_first_chunk_ms:    ~116 ms
+accepted_to_first_playback_ms: ~116 ms
 ```
 
 
@@ -26,7 +26,7 @@ accepted_to_first_playback_ms: ~156 ms
 - Systemd user services
 - Latency test script
 - Tested defaults for Qwen3-TTS CustomVoice:
-  - model: `custom-0.6b` / fast backend `Qwen3-TTS-12Hz-1.7B-Base`
+  - model: `custom-0.6b` / fast backend `Qwen3-TTS-12Hz-0.6B-CustomVoice`
   - voice: `Vivian`
 
 ## Architecture
@@ -194,7 +194,7 @@ Returns current generation/playback state, queue lengths, and known jobs.
 
 ### `GET /voices`
 
-Returns the locally tested voice ratings.
+Returns the 0.6B preset-only voice list, aliases, and backend model metadata.
 
 ### `GET /health`
 
@@ -202,11 +202,10 @@ Health check.
 
 ## Voice notes
 
-Tested Qwen preset voices:
+Tested Qwen 0.6B preset voices:
 
-- top: `Vivian`
-- ok: `Aiden`, `Serena`, `Uncle_Fu`, `Ono_Anna`
-- no: `Ryan`, `Dylan`, `Eric`, `Sohee`
+- `Serena`, `Vivian`, `Aiden`, `Dylan`, `Eric`, `Ryan`, `Ono_Anna`, `Sohee`, `Uncle_Fu`
+- Custom clones such as Loree/Malik/Silvan are intentionally not exposed in the 0.6B preset-only daemon mode.
 
 ## Development
 

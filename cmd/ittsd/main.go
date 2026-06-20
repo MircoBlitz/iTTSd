@@ -20,6 +20,19 @@ import (
 	"time"
 )
 
+const Version = "v0.2.0"
+
+var supportedPresetVoices = []string{"serena", "vivian", "aiden", "dylan", "eric", "ryan", "ono_anna", "sohee", "uncle_fu"}
+
+var openAIAliases = map[string]string{
+	"alloy":   "ryan",
+	"echo":    "aiden",
+	"fable":   "dylan",
+	"onyx":    "eric",
+	"nova":    "serena",
+	"shimmer": "vivian",
+}
+
 type Config struct {
 	Addr         string
 	RuntimeDir   string
@@ -144,9 +157,14 @@ func (d *Daemon) generatorLoop() {
 }
 
 func (d *Daemon) playFastStream(j *Job, text string, last bool) error {
-	payload := map[string]any{"input": text, "voice": strings.ToLower(j.Req.Speaker), "language": qwenHTTPDirectionLang(j.Req.Lang), "chunk_size": 4}
-	if j.Req.Instruct != "" {
-		payload["instruct"] = j.Req.Instruct
+	voice := normalizeVoice(j.Req.Speaker)
+	if mapped, ok := openAIAliases[voice]; ok {
+		voice = mapped
+	}
+	instruct := j.Req.Instruct
+	payload := map[string]any{"input": text, "voice": voice, "language": qwenHTTPDirectionLang(j.Req.Lang), "chunk_size": 4}
+	if instruct != "" {
+		payload["instruct"] = instruct
 	}
 	b, _ := json.Marshal(payload)
 	url := strings.TrimRight(d.cfg.FastURL, "/") + "/v1/audio/speech/pcm-stream"
@@ -250,9 +268,20 @@ func (d *Daemon) getJobStatus(id string) string {
 
 func (d *Daemon) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]any{"ok": true}) })
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"ok": true, "version": Version, "backend": "qwen3-fast-tts", "model": "Qwen3-TTS-12Hz-0.6B-CustomVoice"})
+	})
+	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"version": Version})
+	})
 	mux.HandleFunc("GET /voices", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"top": []string{"Vivian"}, "ok": []string{"Aiden", "Serena", "Uncle_Fu", "Ono_Anna"}, "no": []string{"Ryan", "Dylan", "Eric", "Sohee"}, "default": "Vivian"})
+		writeJSON(w, map[string]any{
+			"model":                 "Qwen3-TTS-12Hz-0.6B-CustomVoice",
+			"default":               strings.ToLower(d.cfg.DefaultVoice),
+			"preset":                supportedPresetVoices,
+			"aliases":               openAIAliases,
+			"custom_clones_enabled": false,
+		})
 	})
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
@@ -267,6 +296,10 @@ func (d *Daemon) routes() http.Handler {
 		}
 		if strings.TrimSpace(req.Text) == "" {
 			http.Error(w, "text required", 400)
+			return
+		}
+		if err := validateSpeakVoice(req, d.cfg.DefaultVoice); err != nil {
+			http.Error(w, err.Error(), 400)
 			return
 		}
 		j := d.Enqueue(req)
@@ -293,8 +326,13 @@ func main() {
 	flag.StringVar(&cfg.RuntimeDir, "runtime-dir", home+"/.cache/ittsd", "runtime dir")
 	flag.StringVar(&cfg.DefaultVoice, "voice", "Vivian", "default voice")
 	flag.StringVar(&cfg.DefaultLang, "lang", "auto", "default language")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.StringVar(&cfg.FastURL, "fast-url", "http://127.0.0.1:8001", "faster-qwen3-tts server base URL")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(Version)
+		return
+	}
 	if cfg.FastURL == "" {
 		log.Fatal("--fast-url is required; iTTSd is Go-only and uses an external streaming backend")
 	}
@@ -336,12 +374,60 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 func newID() string { b := make([]byte, 8); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 
+func normalizeVoice(voice string) string {
+	v := strings.ToLower(strings.TrimSpace(voice))
+	return strings.ReplaceAll(v, "-", "_")
+}
+
+func isSupportedVoice(voice string) bool {
+	v := normalizeVoice(voice)
+	if _, ok := openAIAliases[v]; ok {
+		return true
+	}
+	for _, candidate := range supportedPresetVoices {
+		if v == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func validateSpeakVoice(req SpeakRequest, defaultVoice string) error {
+	voice := req.Speaker
+	if voice == "" {
+		voice = req.Voice
+	}
+	if voice == "" {
+		voice = defaultVoice
+	}
+	if !isSupportedVoice(voice) {
+		return fmt.Errorf("unsupported voice %q for 0.6B preset-only mode; use one of: %s", voice, strings.Join(supportedPresetVoices, ", "))
+	}
+	return nil
+}
+
 func qwenHTTPDirectionLang(lang string) string {
 	switch strings.ToLower(lang) {
 	case "en", "english":
 		return "English"
 	case "de", "german":
 		return "German"
+	case "fr", "french", "français", "francais":
+		return "French"
+	case "zh", "cn", "chinese", "mandarin", "中文", "普通话":
+		return "Chinese"
+	case "ja", "jp", "japanese":
+		return "Japanese"
+	case "ko", "kr", "korean":
+		return "Korean"
+	case "es", "spanish":
+		return "Spanish"
+	case "it", "italian":
+		return "Italian"
+	case "pt", "portuguese":
+		return "Portuguese"
+	case "ru", "russian":
+		return "Russian"
 	case "auto", "":
 		return "English"
 	default:
