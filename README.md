@@ -205,7 +205,7 @@ Health check.
 Tested Qwen 0.6B preset voices:
 
 - `Serena`, `Vivian`, `Aiden`, `Dylan`, `Eric`, `Ryan`, `Ono_Anna`, `Sohee`, `Uncle_Fu`
-- Custom clones such as Loree/Malik/Silvan are intentionally not exposed in the 0.6B preset-only daemon mode.
+- Custom cvoices are intentionally not exposed but possible.
 
 ## Development
 
